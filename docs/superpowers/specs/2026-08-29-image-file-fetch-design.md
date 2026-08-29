@@ -86,14 +86,52 @@ best-effort `Content-Type` guessed from the file extension
      and calling `Next()` again discards them).
    - Matching entry that is a regular file (`Typeflag == tar.TypeReg`):
      write response headers, then `io.Copy(w, tarReader)` and return.
-   - Matching entry that is not a regular file (directory, symlink,
-     etc.): treat as not found — return 404 (a bare "download this path"
-     API has no sensible behavior for a directory).
-7. Reaching end-of-stream with no match → 404 `file not found in image`.
+   - Matching entry that is a symlink (`Typeflag == tar.TypeSymlink`):
+     see "Symlink resolution" below — this is not an edge case, it's
+     the normal shape of many real paths (e.g. `/etc/os-release` in
+     most distro base images).
+   - Matching entry that is neither a regular file nor a symlink
+     (directory, device, etc.): treat as not found — return 404 (a bare
+     "download this path" API has no sensible behavior for a
+     directory).
+7. Reaching end-of-stream with no match at all → 404
+   `file not found in image`.
 
 Nothing is ever written to a temp file or directory, so there is no
 cleanup step and no risk of orphaned data if a request is interrupted
 partway through.
+
+### Symlink resolution
+
+A tar stream can only be read forward once — there's no seeking
+backward to an entry already passed. That constrains how a symlink can
+be followed without falling back to disk:
+
+- On hitting a symlink, resolve its target to a normalized path
+  (absolute `Linkname` used as-is; relative `Linkname` resolved against
+  the symlink's own directory) and keep scanning **the same pass**
+  looking for that target instead. Most images place a symlink's
+  target in the same layer (verified empirically against
+  `alpine:latest`: `/etc/os-release` → `../usr/lib/os-release` resolves
+  in a single pull because the target appears later in the same tar
+  stream), so this is the common case and costs nothing extra.
+- If the pass reaches end-of-stream while still chasing a target that
+  was redirected to at least once, that target's entry — if it exists
+  — must lie *earlier* in the tar than the point the redirect was
+  discovered. The only way to reach it without buffering is to re-pull
+  the image and scan again from the start, this time looking
+  specifically for that target. This restart is bounded to 10 attempts
+  total (`maxSymlinkAttempts`), which also bounds the cost a
+  maliciously long (but non-cyclic) symlink chain in an untrusted image
+  can impose.
+- A pass that reaches end-of-stream *without ever having redirected*
+  (the very first path looked up in that pass was never found) is
+  conclusive: that path does not exist anywhere in the image. Return
+  404 immediately rather than restarting.
+- Every target a chain redirects to is recorded in a `visited` set
+  shared across the whole request. If a redirect would revisit an
+  already-visited target, that's a symlink cycle — return 502
+  immediately rather than looping.
 
 ## Error handling summary
 
@@ -103,8 +141,10 @@ partway through.
 | Malformed image reference                     | 400    |
 | Registry auth rejected                        | 401/403|
 | Image or tag not found                        | 404    |
-| Requested path not found in image, or not a regular file | 404 |
-| Other registry/network error                  | 502    |
+| Requested path (after following any symlinks) not found in image, or resolves to something other than a regular file | 404 |
+| Symlink cycle detected                        | 502    |
+| More than `maxSymlinkAttempts` (10) re-pulls needed to resolve a symlink chain | 502 |
+| Other registry/network error, or corrupt tar stream | 502 |
 
 ## Deployment
 
@@ -130,13 +170,22 @@ Two things to account for at deploy time:
 
 - Unit test: path normalization/matching (leading slash, `./` prefix,
   `path.Clean` edge cases).
-- Unit test: non-regular-file match (directory/symlink) is treated as
+- Unit test: non-regular, non-symlink match (directory) is treated as
   404.
-- Integration test: pull a small public image (e.g. `alpine`) and
-  download a known file end-to-end against the real registry — mocking
-  the registry protocol adds little value here since
+- Unit test: symlink resolved forward within the same pass.
+- Unit test: symlink whose target lies earlier in the tar reports the
+  pending target back to the caller for a restart, rather than
+  incorrectly reporting not-found.
+- Unit test: a symlink cycle is rejected with a 502, without looping.
+- Integration test: pull a small public image (e.g. `alpine:latest`)
+  and download a known file end-to-end against the real registry —
+  mocking the registry protocol adds little value here since
   go-containerregistry's own test suite already covers protocol
-  correctness.
+  correctness. This also exercises symlink resolution for real:
+  `/etc/os-release` in `alpine:latest` is itself a symlink to
+  `/usr/lib/os-release`.
+- Integration test: download a plain regular-file path directly (no
+  symlink involved), to cover the zero-redirect common case.
 - Integration test: request a path that doesn't exist in the image →
   404.
 
