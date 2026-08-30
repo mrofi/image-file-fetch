@@ -31,6 +31,21 @@ for that single request, never stored:
       -d '{"image": "registry.example.com/repo:tag", "path": "/app/config.yaml", "username": "user", "password": "token"}' \
       -o config.yaml
 
+## CLI mode
+
+Instead of running the server, fetch a single file directly from the
+command line:
+
+    go run . fetch alpine:latest /etc/os-release
+    # writes ./os-release
+
+    go run . fetch -output - alpine:latest /etc/os-release
+    # streams to stdout
+
+Flags: `-username` / `-password` for private images, `-output FILE`
+(defaults to the basename of `<path>` in the current directory; use
+`-output -` for stdout).
+
 ## Running as a container
 
     docker build -t image-file-fetch .
