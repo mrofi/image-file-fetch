@@ -28,6 +28,13 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Build
+        run: go build -o image-file-fetch .
+
+      - name: Smoke-test CLI fetch mode
+        run: |
+          ./image-file-fetch fetch -output - alpine:latest /etc/os-release | grep -q "Alpine Linux"
+
   build-and-push:
     needs: test
     if: github.event_name == 'push'
