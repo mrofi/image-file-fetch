@@ -1,7 +1,7 @@
 # image-file-fetch
 
-A small Go webserver that extracts one exact file from a container
-image and streams it back over HTTP — no Docker daemon, no image
+A small Go webserver that extracts one exact file, or one directory as a
+tar, from a container image and streams it back over HTTP — no Docker daemon, no image
 listing, no disk writes. It pulls the image directly from its
 registry, flattens its layers in a stream, and copies the matching
 file straight into the HTTP response. Symlinks (e.g. `/etc/os-release`
@@ -20,6 +20,29 @@ Download a file:
       -H 'Content-Type: application/json' \
       -d '{"image": "alpine:latest", "path": "/etc/os-release"}' \
       -o os-release
+
+### A whole directory
+
+Add `"archive": "tar"` and `path` is a directory: everything under it
+comes back as a tar stream (`application/x-tar`, no `Content-Length`),
+with entry names relative to that directory.
+
+    curl -X POST http://localhost:8080/download \
+      -H 'Content-Type: application/json' \
+      -d '{"image": "nginx:alpine", "path": "/usr/share/nginx/html", "archive": "tar"}' \
+      | tar -x -C ./html
+
+- Regular files, directories and symlinks are included. Devices and other
+  special files are left out.
+- An absolute symlink that points inside the directory is rewritten to a
+  relative one, so it still works after unpacking elsewhere. Other
+  symlinks are passed through as they are.
+- A hard link is kept only when the file it names is inside the directory.
+- If `path` is itself a symlink to a directory, it is followed.
+- `404` when the directory is not in the image, `400` when `path` is a
+  file (leave out `archive` to fetch a file).
+- If the image turns out to be unreadable after the response has started,
+  the stream is cut short: check that the tar unpacks without error.
 
 ### Private images
 
@@ -42,7 +65,13 @@ command line:
     go run . fetch -output - alpine:latest /etc/os-release
     # streams to stdout
 
-Flags: `-username` / `-password` for private images, `-output FILE`
+    go run . fetch -archive nginx:alpine /usr/share/nginx/html
+    # writes ./html.tar
+
+    go run . fetch -archive -output - nginx:alpine /usr/share/nginx/html | tar -x -C ./html
+
+Flags: `-archive` to fetch a directory as a tar,
+`-username` / `-password` for private images, `-output FILE`
 (defaults to the basename of `<path>` in the current directory; use
 `-output -` for stdout).
 

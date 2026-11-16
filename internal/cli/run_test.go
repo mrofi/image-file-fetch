@@ -140,3 +140,38 @@ func TestRunPassesCredentials(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
 	}
 }
+
+func TestRunArchiveWritesTarNamedAfterDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+
+	var gotReq extract.Request
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"-archive", "nginx:latest", "/usr/share/nginx/html"}, func(ctx context.Context, req extract.Request, onMatch extract.MatchFunc) error {
+		gotReq = req
+		dst, err := onMatch("html.tar", -1)
+		if err != nil {
+			return err
+		}
+		_, err = dst.Write([]byte("tar bytes"))
+		return err
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %s", code, stderr.String())
+	}
+	if gotReq.Archive != extract.ArchiveTar {
+		t.Errorf("request archive = %q, want %q", gotReq.Archive, extract.ArchiveTar)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "html.tar"))
+	if err != nil || string(data) != "tar bytes" {
+		t.Errorf("html.tar = %q, %v; want the stream written to <basename>.tar", data, err)
+	}
+}

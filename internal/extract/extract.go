@@ -19,6 +19,10 @@ const maxSymlinkAttempts = 10
 // for req.Path (following symlinks as needed), and streams the matching
 // file into whatever writer onMatch returns. onMatch is called at most
 // once, only when a matching regular file is found.
+//
+// With req.Archive set to ArchiveTar, req.Path is a directory instead:
+// everything under it is streamed as a tar with names relative to it, and
+// onMatch is called with size -1 because the size is not known up front.
 func Fetch(ctx context.Context, req Request, onMatch MatchFunc) error {
 	if err := req.Validate(); err != nil {
 		return err
@@ -48,7 +52,11 @@ func Fetch(ctx context.Context, req Request, onMatch MatchFunc) error {
 		}
 
 		rc := mutate.Extract(img)
-		found, pending, err := scanTar(rc, target, visited, onMatch)
+		scan := scanTar
+		if req.Archive == ArchiveTar {
+			scan = scanDir
+		}
+		found, pending, err := scan(rc, target, visited, onMatch)
 		rc.Close()
 		if err != nil {
 			return err
@@ -57,6 +65,9 @@ func Fetch(ctx context.Context, req Request, onMatch MatchFunc) error {
 			return nil
 		}
 		if pending == target {
+			if req.Archive == ArchiveTar {
+				return &StatusError{Status: 404, Msg: "directory not found in image"}
+			}
 			return &StatusError{Status: 404, Msg: "file not found in image"}
 		}
 		target = pending

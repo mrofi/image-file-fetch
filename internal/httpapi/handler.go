@@ -21,6 +21,7 @@ type FetchFunc func(ctx context.Context, req extract.Request, onMatch extract.Ma
 type downloadRequest struct {
 	Image    string `json:"image"`
 	Path     string `json:"path"`
+	Archive  string `json:"archive"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -43,6 +44,7 @@ func NewDownloadHandler(fetch FetchFunc, logger *log.Logger) http.HandlerFunc {
 		req := extract.Request{
 			Image:    body.Image,
 			Path:     body.Path,
+			Archive:  body.Archive,
 			Username: body.Username,
 			Password: body.Password,
 		}
@@ -52,10 +54,15 @@ func NewDownloadHandler(fetch FetchFunc, logger *log.Logger) http.HandlerFunc {
 			responded = true
 			base := path.Base(name)
 			w.Header().Set("Content-Disposition", "attachment; filename=\""+base+"\"")
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 			ct := mime.TypeByExtension(path.Ext(base))
 			if ct == "" {
 				ct = "application/octet-stream"
+			}
+			if size >= 0 {
+				w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+			} else {
+				// A directory, streamed as a tar: its size is not known up front.
+				ct = "application/x-tar"
 			}
 			w.Header().Set("Content-Type", ct)
 			w.WriteHeader(http.StatusOK)

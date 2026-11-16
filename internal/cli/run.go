@@ -25,12 +25,13 @@ func Run(args []string, fetch FetchFunc, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: image-file-fetch fetch [-username U] [-password P] [-output FILE] <image> <path>")
+		fmt.Fprintln(stderr, "usage: image-file-fetch fetch [-archive] [-username U] [-password P] [-output FILE] <image> <path>")
 		fs.PrintDefaults()
 	}
 	username := fs.String("username", "", "registry username (for private images)")
 	password := fs.String("password", "", "registry password (for private images)")
-	output := fs.String("output", "", "output file path, or - for stdout (default: basename of <path> in the current directory)")
+	output := fs.String("output", "", "output file path, or - for stdout (default: basename of <path> in the current directory, plus .tar with -archive)")
+	archive := fs.Bool("archive", false, "<path> is a directory: write everything under it as a tar")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -48,8 +49,17 @@ func Run(args []string, fetch FetchFunc, stdout, stderr io.Writer) int {
 	}
 
 	dest := *output
+	if *archive {
+		req.Archive = extract.ArchiveTar
+	}
 	if dest == "" {
 		dest = path.Base(req.Path)
+		if *archive {
+			if dest == "/" || dest == "." {
+				dest = "root"
+			}
+			dest += ".tar"
+		}
 	}
 
 	var createdFile *os.File

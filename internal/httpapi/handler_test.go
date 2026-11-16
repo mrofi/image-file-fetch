@@ -95,3 +95,37 @@ func TestHandlerStreamsMatchedFile(t *testing.T) {
 		t.Errorf("Content-Disposition = %q, want %q", got, `attachment; filename="os-release"`)
 	}
 }
+
+func TestHandlerStreamsDirectoryAsTar(t *testing.T) {
+	var gotReq extract.Request
+	h := NewDownloadHandler(func(ctx context.Context, req extract.Request, onMatch extract.MatchFunc) error {
+		gotReq = req
+		dst, err := onMatch("www.tar", -1)
+		if err != nil {
+			return err
+		}
+		_, err = dst.Write([]byte("tar bytes"))
+		return err
+	}, testLogger())
+
+	body, _ := json.Marshal(map[string]string{"image": "nginx:latest", "path": "/var/www", "archive": "tar"})
+	req := httptest.NewRequest(http.MethodPost, "/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h(rr, req)
+
+	if gotReq.Archive != extract.ArchiveTar {
+		t.Errorf("request archive = %q, want %q", gotReq.Archive, extract.ArchiveTar)
+	}
+	if rr.Code != http.StatusOK || rr.Body.String() != "tar bytes" {
+		t.Errorf("status %d body %q, want 200 and the stream", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Content-Type"); got != "application/x-tar" {
+		t.Errorf("Content-Type = %q, want application/x-tar", got)
+	}
+	if got := rr.Header().Get("Content-Length"); got != "" {
+		t.Errorf("Content-Length = %q, want none for a stream of unknown size", got)
+	}
+	if got := rr.Header().Get("Content-Disposition"); got != `attachment; filename="www.tar"` {
+		t.Errorf("Content-Disposition = %q", got)
+	}
+}

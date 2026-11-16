@@ -81,3 +81,57 @@ func TestFetchMissingPathReturns404(t *testing.T) {
 		t.Errorf("Status = %d, want %d", se.Status, http.StatusNotFound)
 	}
 }
+
+func TestFetchDirectoryAsTar(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network test in -short mode")
+	}
+
+	// /etc/apk in alpine:latest holds the repositories file and a keys
+	// directory.
+	var out bytes.Buffer
+	var gotSize int64
+	err := Fetch(context.Background(), Request{
+		Image:   "alpine:latest",
+		Path:    "/etc/apk",
+		Archive: ArchiveTar,
+	}, func(name string, size int64) (io.Writer, error) {
+		gotSize = size
+		return &out, nil
+	})
+	if err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	if gotSize != -1 {
+		t.Errorf("size = %d, want -1 for an archive", gotSize)
+	}
+	entries := readTar(t, out.Bytes())
+	if !bytes.Contains([]byte(entries["repositories"]), []byte("alpine")) {
+		t.Errorf("repositories = %q, want it to mention alpine (entries: %d)", entries["repositories"], len(entries))
+	}
+	if entries["keys/"] != "<dir>" {
+		t.Errorf("keys/ = %q, want a directory entry", entries["keys/"])
+	}
+	for name := range entries {
+		if name == "" || name[0] == '/' || bytes.HasPrefix([]byte(name), []byte("etc/")) {
+			t.Errorf("entry %q is not relative to the requested directory", name)
+		}
+	}
+}
+
+func TestFetchDirectoryErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network test in -short mode")
+	}
+	for path, want := range map[string]int{"/no/such/dir": http.StatusNotFound, "/etc/alpine-release": http.StatusBadRequest} {
+		err := Fetch(context.Background(), Request{Image: "alpine:latest", Path: path, Archive: ArchiveTar},
+			func(string, int64) (io.Writer, error) {
+				t.Errorf("%s: onMatch called, want an error first", path)
+				return io.Discard, nil
+			})
+		statusErr, ok := err.(*StatusError)
+		if !ok || statusErr.Status != want {
+			t.Errorf("%s: err = %v, want status %d", path, err, want)
+		}
+	}
+}
